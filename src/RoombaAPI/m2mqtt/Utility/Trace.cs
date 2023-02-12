@@ -39,8 +39,8 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
     /// </summary>
     internal static class Trace
     {
-        public static TraceLevel TraceLevel;
-        public static WriteTrace TraceListener;
+        public static TraceLevel TraceLevel = TraceLevel.Error;
+        public static WriteTrace TraceListener = null;
 
         [Conditional("DEBUG")]
         public static void Debug(string format, params object[] args)

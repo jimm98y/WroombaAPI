@@ -19,7 +19,7 @@ namespace uPLibrary.Networking.M2Mqtt
     /// <summary>
     /// Supported SSL/TLS protocol versions
     /// </summary>
-    public enum MqttSslProtocols
+    internal enum MqttSslProtocols
     {
         None,
         SSLv3,

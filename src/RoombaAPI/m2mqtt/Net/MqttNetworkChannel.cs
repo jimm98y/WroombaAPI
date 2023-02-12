@@ -32,7 +32,7 @@ namespace uPLibrary.Networking.M2Mqtt
     /// <summary>
     /// Channel to communicate over the network
     /// </summary>
-    public class MqttNetworkChannel : IMqttNetworkChannel
+    internal class MqttNetworkChannel : IMqttNetworkChannel
     {
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
         private readonly RemoteCertificateValidationCallback userCertificateValidationCallback;
@@ -427,7 +427,7 @@ namespace uPLibrary.Networking.M2Mqtt
     /// <summary>
     /// MQTT SSL utility class
     /// </summary>
-    public static class MqttSslUtility
+    internal static class MqttSslUtility
     {
 #if (!MF_FRAMEWORK_VERSION_V4_2 && !MF_FRAMEWORK_VERSION_V4_3 && !COMPACT_FRAMEWORK)
         public static SslProtocols ToSslPlatformEnum(MqttSslProtocols mqttSslProtocol)

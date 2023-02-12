@@ -51,6 +51,7 @@ using System.Collections;
 // (it's ambiguos with uPLibrary.Networking.M2Mqtt.Utility.Trace)
 using MqttUtility = uPLibrary.Networking.M2Mqtt.Utility;
 using System.IO;
+using System.Diagnostics;
 
 namespace uPLibrary.Networking.M2Mqtt
 {
@@ -694,6 +695,7 @@ namespace uPLibrary.Networking.M2Mqtt
 #if TRACE
                 MqttUtility.Trace.WriteLine(TraceLevel.Error, "Exception occurred: {0}", e.ToString());
 #endif
+                Debug.WriteLine(e.Message);
 
                 // client must close connection
                 this.OnConnectionClosing();
@@ -2491,6 +2493,7 @@ namespace uPLibrary.Networking.M2Mqtt
 #if TRACE
                 MqttUtility.Trace.WriteLine(TraceLevel.Error, "Exception occurred: {0}", e.ToString());
 #endif
+                Debug.WriteLine(e.Message);
 
                 // raise disconnection client event
                 this.OnConnectionClosing();

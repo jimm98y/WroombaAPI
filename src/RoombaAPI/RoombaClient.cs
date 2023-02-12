@@ -12,78 +12,45 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
-using uPLibrary.Networking.M2Mqtt;
 using RoombaAPI.API;
+using uPLibrary.Networking.M2Mqtt;
 
 namespace RoombaAPI
 {
-    public class MessageReceivedEventArgs
-    {
-        private string message;
-
-        public MessageReceivedEventArgs(string message, ConfigurationState state)
-        {
-            this.Message = message;
-            this.State = state;
-        }
-
-        public string Message { get => message; private set => message = value; }
-
-        public ConfigurationState State { get; private set; }
-    }
-
+    /// <summary>
+    /// iRobot Roomba client.
+    /// </summary>
     public class RoombaClient : IDisposable
     {
+        private class UdpState
+        {
+            public UdpClient Client { get; set; }
+            public IPEndPoint Endpoint { get; set; }
+            public IList<RoombaRobot> Result { get; set; }
+        }
+
         private const int ROOMBA_BROADCAST_PORT = 5678;
         private const string ROOMBA_BROADCAST_MESSAGE = "irobotmcs";
         private const int ROOMBA_BROADCAST_TIMEOUT = 10000;
+        private const int KEEP_ALIVE_PERIOD = 30;
+        private const int MQTT_PORT = 8883;
 
-        private MqttClient client = null;
-
-        internal MqttClient Client
-        {
-            get
-            {
-                return client;
-            }
-
-            private set { client = value; }
-        }
+        private static SemaphoreSlim discoverySlim = new SemaphoreSlim(1);
+        private MqttClient _client = null;
 
         public event EventHandler<MessageReceivedEventArgs> MessegeReceived;
 
         public RoombaClient(string address)
         {
-            this.Client = CreateMqttClient(address);
+            this._client = CreateMqttClient(address);
         }
 
-        private MqttClient CreateMqttClient(string address)
+        public bool SignIn(string user, string password)
         {
-            // we have to use a custom build of the m2mqtt because of a necessary password length check adjustment in MqttMsgConnect.cs
-            MqttClient client = new MqttClient(address, 8883, true, null, null, MqttSslProtocols.TLSv1_2, OnCertificateValidation, OnCertificateSelection);
-            client.ProtocolVersion = MqttProtocolVersion.Version_3_1_1;
-            client.MqttMsgPublishReceived += Client_MqttMsgPublishReceived;
-            return client;
+            return this._client.Connect(user, user, password, false, KEEP_ALIVE_PERIOD) == 0;
         }
 
-        private X509Certificate OnCertificateSelection(object sender, string targetHost, X509CertificateCollection localCertificates, X509Certificate remoteCertificate, string[] acceptableIssuers)
-        {
-            return remoteCertificate;
-        }
-
-        private bool OnCertificateValidation(object arg1, X509Certificate arg2, X509Chain arg3, SslPolicyErrors arg4)
-        {
-            // ignoreall certificate errors
-            return true;
-        }
-
-        public byte Connect(string user, string password)
-        {
-            byte ret = client.Connect(user, user, password, false, 30);
-            return ret;
-        }
-
-        public void SetTime()
+        public void SetCurrentTime()
         {
             int offset = GetUtcTimeOffset();
             long time = GetTimestamp();
@@ -173,14 +140,34 @@ namespace RoombaAPI
             ExecuteCommand("dock");
         }
 
+        private MqttClient CreateMqttClient(string address)
+        {
+            // we have to use a custom build of the m2mqtt because of a necessary password length check adjustment in MqttMsgConnect.cs
+            MqttClient client = new MqttClient(address, MQTT_PORT, true, null, null, MqttSslProtocols.TLSv1_2, OnCertificateValidation, OnCertificateSelection);
+            client.ProtocolVersion = MqttProtocolVersion.Version_3_1_1;
+            client.MqttMsgPublishReceived += Client_MqttMsgPublishReceived;
+            return client;
+        }
+
+        private X509Certificate OnCertificateSelection(object sender, string targetHost, X509CertificateCollection localCertificates, X509Certificate remoteCertificate, string[] acceptableIssuers)
+        {
+            return remoteCertificate;
+        }
+
+        private bool OnCertificateValidation(object arg1, X509Certificate arg2, X509Chain arg3, SslPolicyErrors arg4)
+        {
+            // ignore all certificate errors
+            return true;
+        }
+
         private void Client_MqttMsgPublishReceived(object sender, uPLibrary.Networking.M2Mqtt.Messages.MqttMsgPublishEventArgs e)
         {
             string msg = Encoding.UTF8.GetString(e.Message);
-            ConfigurationState state = null;
+            RoombaState state = null;
 
             try
             {
-                state = JsonSerializer.Deserialize<ConfigurationState>(msg, new JsonSerializerOptions
+                state = JsonSerializer.Deserialize<RoombaState>(msg, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
                 });
@@ -193,27 +180,16 @@ namespace RoombaAPI
             MessegeReceived?.Invoke(this, new MessageReceivedEventArgs(msg, state));
         }
 
-        public Tuple<string[], int[], int[]> ParseScheduleMessage(string msg)
-        {
-            //{"state":{"reported":{"cleanSchedule":{"cycle":["none","start","start","start","start","start","none"],"h":[9,9,9,9,9,9,9],"m":[0,0,0,0,0,0,0]},"bbchg3":{"avgMin":371,"hOnDock":337,"nAvail":32,"estCap":7451,"nLithChrg":12,"nNimhChrg":0,"nDocks":35}}}}
-            JsonNode root = JsonValue.Parse(msg);
-            var cleanSchedule = root["state"].AsObject()["reported"].AsObject()["cleanSchedule"].AsObject();
-            var cycle = cleanSchedule["cycle"].AsArray().Select(x => x.GetValue<string>()).ToArray();
-            var h = cleanSchedule["h"].AsArray().Select(x => x.GetValue<int>()).ToArray();
-            var m = cleanSchedule["m"].AsArray().Select(x => x.GetValue<int>()).ToArray();
-            return new Tuple<string[], int[], int[]>(cycle, h, m);
-        }
-
-        private void ExecuteCommand(string action)
+        private int ExecuteCommand(string action)
         {
             string command = "{\"command\": \"" + action + "\", \"time\": " + GetTimestamp() + ", \"initiator\": \"localApp\"}";
-            var ret = Client.Publish("cmd", Encoding.UTF8.GetBytes(command));
+            return this._client.Publish("cmd", Encoding.UTF8.GetBytes(command));
         }
 
-        private void ExecuteDeltaCommand(string state)
+        private int ExecuteDeltaCommand(string state)
         {
             string command = "{\"state\": " + state + "}";
-            var ret = Client.Publish("delta", Encoding.UTF8.GetBytes(command));
+            return this._client.Publish("delta", Encoding.UTF8.GetBytes(command));
         }
 
         private long GetTimestamp()
@@ -221,17 +197,12 @@ namespace RoombaAPI
             return (long)Math.Floor(GetTime() / 1000.0);
         }
 
-        private Int64 GetTime()
+        private long GetTime()
         {
             var st = new DateTime(1970, 1, 1);
             TimeSpan t = (DateTime.Now.ToUniversalTime() - st);
             long retval = (long)(t.TotalMilliseconds + 0.5);
             return retval;
-        }
-
-        public string GetCycle(bool on)
-        {
-            return on ? "start" : "none";
         }
 
         private static string GetSsid(string ssid)
@@ -241,29 +212,14 @@ namespace RoombaAPI
 
         private static int GetUtcTimeOffset()
         {
-            return (int)Math.Floor((DateTime.Now.Subtract(DateTime.UtcNow)).Add(TimeSpan.FromMilliseconds(500)).TotalMinutes);
+            return (int)Math.Floor(DateTime.Now.Subtract(DateTime.UtcNow).Add(TimeSpan.FromMilliseconds(500)).TotalMinutes);
         }
 
-        #region Discovery
-
-        public static SemaphoreSlim _discoverySlim = new SemaphoreSlim(1);
-
-        private class UdpState
+        public static async Task<IList<RoombaRobot>> DiscoverAsync(string networkIpAddress, int broadcastTimeout = ROOMBA_BROADCAST_TIMEOUT)
         {
-            public UdpClient Client { get; set; }
-            public IPEndPoint Endpoint { get; set; }
-            public Dictionary<string, Tuple<string, string>> Result { get; set; }
-        }
+            await discoverySlim.WaitAsync();
 
-        /// <summary>
-        /// Discovery.
-        /// </summary>
-        /// <returns></returns>
-        public static async Task<Dictionary<string, Tuple<string, string>>> DiscoverAsync(string networkIpAddress, int broadcastTimeout = ROOMBA_BROADCAST_TIMEOUT)
-        {
-            await _discoverySlim.WaitAsync();
-
-            Dictionary<string, Tuple<string, string>> robots = new Dictionary<string, Tuple<string, string>>();
+            IList<RoombaRobot> robots = new List<RoombaRobot>();
             IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, ROOMBA_BROADCAST_PORT + 1);
             IPEndPoint broadcastEndpoint = new IPEndPoint(IPAddress.Parse(networkIpAddress), ROOMBA_BROADCAST_PORT);
 
@@ -289,7 +245,7 @@ namespace RoombaAPI
             }
             finally
             {
-                _discoverySlim.Release();
+                discoverySlim.Release();
             }
         }
 
@@ -314,29 +270,35 @@ namespace RoombaAPI
                         hostName = parsedNode.AsValue().ToString().Split('-').Last();
                     }
 
-                    string password = await GetPassword(host);
-                    robots.Add(host, new Tuple<string, string>(hostName, password));
+                    string password = await GetPasswordAsync(host);
+                    robots.Add(new RoombaRobot(host, hostName, password));
                 }
 
                 client.BeginReceive(MessageReceived, result.AsyncState);
             }
             catch(Exception ex)
             {
-
+                Debug.WriteLine(ex.Message);
             }
         }
 
-        private static async Task<string> GetPassword(string host)
+        private static async Task<string> GetPasswordAsync(string host)
         {
             string password = string.Empty;
 
-            using (TcpClient tcpClient = new TcpClient(host, 8883))
+            using (TcpClient tcpClient = new TcpClient(host, MQTT_PORT))
             {
-                using (SslStream sslStream = new SslStream(tcpClient.GetStream(), false,
-                    new RemoteCertificateValidationCallback((sender, certificate, chain, sslPolicyErrors) => { return true; }) // ignore all SSL errors
-                ))
+                using (SslStream sslStream = new SslStream(
+                    tcpClient.GetStream(),
+                    false,
+                    new RemoteCertificateValidationCallback(
+                        (sender, certificate, chain, sslPolicyErrors) =>
+                        { 
+                            return true;
+                        })
+                    )
+                )
                 {
-
                     // The server name must match the name on the server certificate.
                     try
                     {
@@ -368,7 +330,8 @@ namespace RoombaAPI
 
                             password = Encoding.UTF8.GetString(buffer, sliceFrom, inBufferCnt - sliceFrom);
                             break;
-                        } while (inBufferCnt != 0);
+                        }
+                        while (inBufferCnt != 0);
                     }
                     catch (AuthenticationException e)
                     {
@@ -388,9 +351,7 @@ namespace RoombaAPI
             return password;
         }
 
-        #endregion // Discovery
-
-        #region IDisposable Support
+        #region IDisposable
 
         private bool disposedValue = false; // To detect redundant calls
 
@@ -400,11 +361,11 @@ namespace RoombaAPI
             {
                 if (disposing)
                 {
-                    if (Client != null)
+                    if (this._client != null)
                     {
-                        Client.MqttMsgPublishReceived -= Client_MqttMsgPublishReceived;
-                        Client.Disconnect();
-                        Client = null;
+                        this._client.MqttMsgPublishReceived -= Client_MqttMsgPublishReceived;
+                        this._client.Disconnect();
+                        this._client = null;
                     }
                 }
 
@@ -417,6 +378,6 @@ namespace RoombaAPI
             Dispose(true);
         }
 
-        #endregion // IDisposable Support
+        #endregion // IDisposable
     }
 }

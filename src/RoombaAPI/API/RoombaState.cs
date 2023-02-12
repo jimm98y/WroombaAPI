@@ -1,6 +1,6 @@
 ﻿namespace RoombaAPI.API
 {
-    public class ConfigurationState
+    public class RoombaState
     {
         public ReportedState State { get; set; }
     }
