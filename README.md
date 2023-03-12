@@ -1,5 +1,5 @@
-# RoombaAPI
-A client to control the iRobot Roomba 966 vacuum cleaner. 
+# WroombaAPI
+A client to control the Roomba 966 vacuum cleaner. 
 
 ## Disclaimer
 To use this unofficial client, it is recommended to NOT update the firmware of the robot to the latest version and stay on version 2.x.x. Newer versions of the firmware are neither tested nor supported. 
@@ -35,7 +35,7 @@ private void roombaClient_MessegeReceived(object? sender, MessageReceivedEventAr
     }
 }
 ```
-Control Roomba:
+Control the robot:
 ```
 roombaClient.Start();
 ```
