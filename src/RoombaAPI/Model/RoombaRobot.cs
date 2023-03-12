@@ -1,4 +1,4 @@
-﻿namespace RoombaAPI
+﻿namespace RoombaAPI.Model
 {
     public class RoombaRobot
     {

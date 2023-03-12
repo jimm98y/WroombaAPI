@@ -4,16 +4,14 @@ namespace RoombaAPI
 {
     public class MessageReceivedEventArgs
     {
-        private string message;
+        public string Message { get; private set; }
+
+        public RoombaState State { get; private set; }
 
         public MessageReceivedEventArgs(string message, RoombaState state)
         {
-            this.Message = message;
-            this.State = state;
+            Message = message;
+            State = state;
         }
-
-        public string Message { get => message; private set => message = value; }
-
-        public RoombaState State { get; private set; }
     }
 }

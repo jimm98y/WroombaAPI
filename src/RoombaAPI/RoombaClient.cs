@@ -13,6 +13,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using RoombaAPI.API;
+using RoombaAPI.Model;
 using uPLibrary.Networking.M2Mqtt;
 
 namespace RoombaAPI
@@ -20,6 +21,7 @@ namespace RoombaAPI
     /// <summary>
     /// iRobot Roomba client.
     /// </summary>
+    /// <remarks>Based upon https://github.com/koalazak/dorita980</remarks>
     public class RoombaClient : IDisposable
     {
         private class UdpState
@@ -35,21 +37,37 @@ namespace RoombaAPI
         private const int KEEP_ALIVE_PERIOD = 30;
         private const int MQTT_PORT = 8883;
 
-        private static SemaphoreSlim discoverySlim = new SemaphoreSlim(1);
-        private MqttClient _client = null;
+        private static SemaphoreSlim _discoverySlim = new SemaphoreSlim(1);
+        private readonly MqttClient _client = null;
 
+        /// <summary>
+        /// Raised when a new message from Roomba is received.
+        /// </summary>
         public event EventHandler<MessageReceivedEventArgs> MessegeReceived;
 
+        /// <summary>
+        /// Ctor.
+        /// </summary>
+        /// <param name="address"></param>
         public RoombaClient(string address)
         {
             this._client = CreateMqttClient(address);
         }
 
+        /// <summary>
+        /// Sign in.
+        /// </summary>
+        /// <param name="user">User name.</param>
+        /// <param name="password">Password.</param>
+        /// <returns>true if successful, false otherwise.</returns>
         public bool SignIn(string user, string password)
         {
             return this._client.Connect(user, user, password, false, KEEP_ALIVE_PERIOD) == 0;
         }
 
+        /// <summary>
+        /// Sets the current time.
+        /// </summary>
         public void SetCurrentTime()
         {
             int offset = GetUtcTimeOffset();
@@ -57,13 +75,24 @@ namespace RoombaAPI
             SetTime(time, offset);
         }
 
+        /// <summary>
+        /// Sets the time.
+        /// </summary>
+        /// <param name="time">UTC time in miliseconds since 1/1/1970.</param>
+        /// <param name="offset">Time offset from UTC in minutes.</param>
         public void SetTime(long time, int offset)
         {
             string cmd = "{\"utctime\": " + time + ", \"localtimeoffset\": " + offset + "}";
             ExecuteDeltaCommand(cmd);
         }
 
-        public void SetWiFi(string ssid, string password, int sec)
+        /// <summary>
+        /// Set Wi-Fi.
+        /// </summary>
+        /// <param name="ssid">Wi-Fi SSID.</param>
+        /// <param name="password">Password.</param>
+        /// <param name="sec"><see cref="WiFiSecurity"/>.</param>
+        public void SetWiFi(string ssid, string password, WiFiSecurity sec)
         {
             // turn on robot (three buttons down, home, clean, spot)
             // hold two buttons Home + Spot for !5 seconds till the wifi light starts flashing up
@@ -71,11 +100,58 @@ namespace RoombaAPI
             // IP is 192.168.10.1
             // after calling this method, hit "Start" on the robot
             string ssidEncoded = GetSsid(ssid);
-            string cmd = "{\"wlcfg\": { \"ssid\": \"" + ssidEncoded + "\", \"sec\": " + sec + ", \"pass\": \"" + password + "\"}}";
+            string cmd = "{\"wlcfg\": { \"ssid\": \"" + ssidEncoded + "\", \"sec\": " + (int)sec + ", \"pass\": \"" + password + "\"}}";
             ExecuteDeltaCommand(cmd);
         }
 
-        public void SetSchedule(string[] actions, int[] hours, int[] minutes)
+        /// <summary>
+        /// Start cleaning.
+        /// </summary>
+        public void Start()
+        {
+            ExecuteCommand("start");
+        }
+
+        /// <summary>
+        /// Stop cleaning.
+        /// </summary>
+        public void Stop()
+        {
+            ExecuteCommand("stop");
+        }
+
+        /// <summary>
+        /// Pause cleaning.
+        /// </summary>
+        public void Pause()
+        {
+            ExecuteCommand("pause");
+        }
+
+        /// <summary>
+        /// Resume cleaning.
+        /// </summary>
+        public void Resume()
+        {
+            ExecuteCommand("resume");
+        }
+
+        /// <summary>
+        /// Return to the dock.
+        /// </summary>
+        public void Dock()
+        {
+            ExecuteCommand("dock");
+        }
+
+        /// <summary>
+        /// Set Roomba schedule.
+        /// </summary>
+        /// <param name="actions">An array of true/false. True means to start cleaning, False no action planned.</param>
+        /// <param name="hours">An array of hours.</param>
+        /// <param name="minutes">An array of minutes.</param>
+        /// <exception cref="ArgumentException"></exception>
+        public void SetSchedule(bool[] actions, int[] hours, int[] minutes)
         {
             if (actions == null || actions.Length != 7 ||
                 hours == null || hours.Length != 7 ||
@@ -87,13 +163,13 @@ namespace RoombaAPI
                     "{" +
                         // su mo tu we th fr sa
                         string.Format("\"cycle\": [ \"{0}\", \"{1}\", \"{2}\", \"{3}\", \"{4}\", \"{5}\", \"{6}\" ],",
-                                        actions[0],
-                                        actions[1],
-                                        actions[2],
-                                        actions[3],
-                                        actions[4],
-                                        actions[5],
-                                        actions[6]) +
+                                        GetCycle(actions[0]),
+                                        GetCycle(actions[1]),
+                                        GetCycle(actions[2]),
+                                        GetCycle(actions[3]),
+                                        GetCycle(actions[4]),
+                                        GetCycle(actions[5]),
+                                        GetCycle(actions[6])) +
                         string.Format("\"h\": [ {0}, {1}, {2}, {3}, {4}, {5}, {6} ],",
                                         hours[0],
                                         hours[1],
@@ -115,29 +191,44 @@ namespace RoombaAPI
             ExecuteDeltaCommand(scheduleCommand);
         }
 
-        public void Start()
+        /// <summary>
+        /// Discover Roomba in the local network.
+        /// </summary>
+        /// <param name="networkIpAddress">Network IP address.</param>
+        /// <param name="broadcastTimeout"><see cref="ROOMBA_BROADCAST_TIMEOUT"/>.</param>
+        /// <returns>A list of discovered <see cref="RoombaRobot"/>.</returns>
+        public static async Task<IList<RoombaRobot>> DiscoverAsync(string networkIpAddress, int broadcastTimeout = ROOMBA_BROADCAST_TIMEOUT)
         {
-            ExecuteCommand("start");
-        }
+            await _discoverySlim.WaitAsync();
 
-        public void Stop()
-        {
-            ExecuteCommand("stop");
-        }
+            IList<RoombaRobot> robots = new List<RoombaRobot>();
+            IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, ROOMBA_BROADCAST_PORT + 1);
+            IPEndPoint broadcastEndpoint = new IPEndPoint(IPAddress.Parse(networkIpAddress), ROOMBA_BROADCAST_PORT);
 
-        public void Pause()
-        {
-            ExecuteCommand("pause");
-        }
+            try
+            {
+                using (UdpClient client = new UdpClient(endPoint))
+                {
+                    UdpState s = new UdpState();
+                    s.Endpoint = endPoint;
+                    s.Client = client;
+                    s.Result = robots;
 
-        public void Resume()
-        {
-            ExecuteCommand("resume");
-        }
+                    client.BeginReceive(MessageReceived, s);
 
-        public void Dock()
-        {
-            ExecuteCommand("dock");
+                    byte[] message = Encoding.ASCII.GetBytes(ROOMBA_BROADCAST_MESSAGE);
+                    await client.SendAsync(message, message.Count(), broadcastEndpoint);
+
+                    // make sure we do not wait forever
+                    await Task.Delay(broadcastTimeout);
+
+                    return s.Result;
+                }
+            }
+            finally
+            {
+                _discoverySlim.Release();
+            }
         }
 
         private MqttClient CreateMqttClient(string address)
@@ -167,10 +258,11 @@ namespace RoombaAPI
 
             try
             {
-                state = JsonSerializer.Deserialize<RoombaState>(msg, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+                state = JsonSerializer.Deserialize<RoombaState>(msg, 
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
             }
             catch (Exception ex)
             {
@@ -190,6 +282,11 @@ namespace RoombaAPI
         {
             string command = "{\"state\": " + state + "}";
             return this._client.Publish("delta", Encoding.UTF8.GetBytes(command));
+        }
+
+        private static string GetCycle(bool on)
+        {
+            return on ? "start" : "none";
         }
 
         private long GetTimestamp()
@@ -213,40 +310,6 @@ namespace RoombaAPI
         private static int GetUtcTimeOffset()
         {
             return (int)Math.Floor(DateTime.Now.Subtract(DateTime.UtcNow).Add(TimeSpan.FromMilliseconds(500)).TotalMinutes);
-        }
-
-        public static async Task<IList<RoombaRobot>> DiscoverAsync(string networkIpAddress, int broadcastTimeout = ROOMBA_BROADCAST_TIMEOUT)
-        {
-            await discoverySlim.WaitAsync();
-
-            IList<RoombaRobot> robots = new List<RoombaRobot>();
-            IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, ROOMBA_BROADCAST_PORT + 1);
-            IPEndPoint broadcastEndpoint = new IPEndPoint(IPAddress.Parse(networkIpAddress), ROOMBA_BROADCAST_PORT);
-
-            try
-            {
-                using (UdpClient client = new UdpClient(endPoint))
-                {
-                    UdpState s = new UdpState();
-                    s.Endpoint = endPoint;
-                    s.Client = client;
-                    s.Result = robots;
-
-                    client.BeginReceive(MessageReceived, s);
-
-                    byte[] message = Encoding.ASCII.GetBytes(ROOMBA_BROADCAST_MESSAGE);
-                    await client.SendAsync(message, message.Count(), broadcastEndpoint);
-
-                    // make sure we do not wait forever
-                    await Task.Delay(broadcastTimeout);
-
-                    return s.Result;
-                }
-            }
-            finally
-            {
-                discoverySlim.Release();
-            }
         }
 
         private static async void MessageReceived(IAsyncResult result)
@@ -361,12 +424,8 @@ namespace RoombaAPI
             {
                 if (disposing)
                 {
-                    if (this._client != null)
-                    {
-                        this._client.MqttMsgPublishReceived -= Client_MqttMsgPublishReceived;
-                        this._client.Disconnect();
-                        this._client = null;
-                    }
+                    this._client.MqttMsgPublishReceived -= Client_MqttMsgPublishReceived;
+                    this._client.Disconnect();
                 }
 
                 disposedValue = true;
