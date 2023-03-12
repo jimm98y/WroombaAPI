@@ -39,5 +39,5 @@ Control the robot:
 ```
 roombaClient.Start();
 ```
-# Credits
+## Credits
 This project is just a C# port of https://github.com/koalazak/dorita980.
