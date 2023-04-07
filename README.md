@@ -6,22 +6,22 @@ To use this unofficial client, it is recommended to NOT update the firmware of t
 
 ## Discovery
 Discover robots in the local network:
-```
+```cs
 var robots = await RoombaClient.DiscoverAsync("192.168.1.255");
 ```
 Get the robot:
-```
+```cs
 var robot = robots.First();
 ```
 ## RoombaClient
 Create the `RoombaClient` and subscribe for the message received callback:
-```
+```cs
 var roombaClient = new RoombaClient(robot.HostName);
 roombaClient.MessageReceived += roombaClient_MessageReceived;
 roombaClient.SignIn(robot.UserName, robot.Password);
 ```
 Handle incoming messages:
-```
+```cs
 private void roombaClient_MessegeReceived(object? sender, MessageReceivedEventArgs e)
 {
     var state = e.State;
@@ -36,7 +36,7 @@ private void roombaClient_MessegeReceived(object? sender, MessageReceivedEventAr
 }
 ```
 Control the robot:
-```
+```cs
 roombaClient.Start();
 ```
 ## Credits
